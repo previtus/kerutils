@@ -13,9 +13,9 @@ class FitMonitor(Callback):
     def __init__(self, **opt):
         super(Callback, self).__init__()
         #Callback.__init__(self)
-        self.thresh = opt.get('thresh', 0.02) # max difference between acc and val_acc for saving model
-        self.minacc = opt.get('minacc', 0.99) # minimal accuracy for model saving
-        self.best_acc = self.minacc
+        self.thresh = opt.get('thresh', 0.02) # max difference between loss and val_loss for saving model
+        self.maxloss = opt.get('maxloss', 0.01) # minimal loss for model saving
+        self.best_loss = self.maxloss
         self.filename = opt.get('filename', None)
         self.verbose = opt.get('verbose', 1)
         self.checkpoint = None
@@ -38,10 +38,10 @@ class FitMonitor(Callback):
         self.progress = 0
         self.max_acc = 0
         self.max_val_acc = -1
-        self.max_loss = 0
-        self.max_val_loss = -1
-        self.max_acc_epoch = -1
-        self.max_val_acc_epoch = -1
+        self.min_loss = 1
+        self.min_val_loss = 1
+        self.min_loss_epoch = -1
+        self.min_val_loss_epoch = -1
 
     def on_train_end(self, logs={}):
         "This is the point where training is ending. Good place to summarize calculations"
@@ -52,19 +52,19 @@ class FitMonitor(Callback):
         if self.verbose:
             time_str = format_time(dt.total_seconds())
             print("Total run time:", time_str)
-            print("max_acc = %f  epoch = %d" % (self.max_acc, self.max_acc_epoch))
-            print("max_val_acc = %f  epoch = %d" % (self.max_val_acc, self.max_val_acc_epoch))
+            print("min_loss = %f  epoch = %d" % (self.min_loss, self.min_loss_epoch))
+            print("min_val_loss = %f  epoch = %d" % (self.min_val_loss, self.min_val_loss_epoch))
         if self.filename:
             if self.checkpoint:
                 print("Best model saved in file:", self.filename)
-                print("Checkpoint: epoch=%d, acc=%.6f, val_acc=%.6f" % self.checkpoint)
+                print("Checkpoint: epoch=%d, loss=%.6f, val_loss=%.6f" % self.checkpoint)
             else:
                 print("No checkpoint model found.")
                 #print("Saving the last state:", self.filename)
                 #self.model.save(self.filename)
 
     def on_batch_end(self, batch, logs={}):
-        #print("epoch=%d, batch=%s, acc=%f" % (self.curr_epoch, batch, logs.get('acc')))
+        #print("epoch=%d, batch=%s, loss=%f" % (self.curr_epoch, batch, logs.get('loss')))
         #self.probe(logs)
         if os.path.exists(self.pause_file):
             os.remove(self.pause_file)
@@ -81,19 +81,21 @@ class FitMonitor(Callback):
             self.hist['val_acc'].append(val_acc)
             self.hist['val_loss'].append(val_loss)
 
-        p = int(epoch / (self.params['n_epoch'] / 100.0))
+        #print(self.params)
+        p = int(epoch / (self.params['epochs'] / 100.0))
         if p > self.progress:
             sys.stdout.write('.')
             if p%5 == 0:
                 dt = datetime.datetime.now() - self.start_time
                 time_str = format_time(dt.total_seconds())
-                fmt = '%02d%% epoch=%d, acc=%f, loss=%f, val_acc=%f, val_loss=%f, time=%s\n'
-                vals = (p,    epoch,    acc,    loss,    val_acc,    val_loss,    time_str)
+                fmt = '%02d%% epoch=%d, loss=%f, val_loss=%f, time=%s\n'
+                vals = (p,    epoch,    loss,    val_loss,    time_str)
+
                 sys.stdout.write(fmt % vals)
             sys.stdout.flush()
             self.progress = p
-        if epoch == self.params['n_epoch'] - 1:
-            sys.stdout.write(' %d%% epoch=%d acc=%f loss=%f\n' % (p, epoch, acc, loss))
+        if epoch == self.params['epochs'] - 1:
+            sys.stdout.write(' %d%% epoch=%d loss=%f\n' % (p, epoch, loss))
 
         self.probe(logs)
 
@@ -111,22 +113,24 @@ class FitMonitor(Callback):
             os.remove(self.pause_file)
             self.plot_hist()
 
-        if val_acc > self.max_val_acc:
-            self.max_val_acc = val_acc
-            self.max_val_acc_epoch = epoch
+        if val_loss < self.min_val_loss:
+            self.min_val_loss = val_loss
+            self.min_val_loss_epoch = epoch
 
-        if acc > self.max_acc:
-            self.max_acc = acc
-            self.max_acc_epoch = epoch
+        #print (loss, self.min_loss)
+        if loss < self.min_loss:
+            self.min_loss = loss
+            self.min_loss_epoch = epoch
+
+            #print(self.min_loss_epoch, self.min_loss)
             if self.filename != None:
-                if acc > self.best_acc and (val_acc == -1 or abs(val_acc - acc) <= self.thresh):
-                    print("\nSaving model to %s: epoch=%d, acc=%f, val_acc=%f" % (self.filename, epoch, acc, val_acc))
+                if loss < self.best_loss and (val_loss == -1 or abs(val_loss - loss) <= self.thresh):
+                    print("\nSaving model to %s: epoch=%d, loss=%f, val_loss=%f" % (self.filename, epoch, loss, val_loss))
                     self.model.save(self.filename)
-                    self.checkpoint = (epoch, acc, val_acc)
-                    self.best_acc = acc
+                    self.checkpoint = (epoch, loss, val_loss)
+                    self.best_loss = loss
 
-        self.max_loss = max(self.max_loss, loss)
-        self.max_val_loss = max(self.max_val_loss, val_loss)
+        self.max_acc = max(self.max_acc, acc)
 
     def plot_hist(self):
         #loss, acc = self.model.evaluate(X_train, Y_train, verbose=0)
@@ -162,7 +166,7 @@ class FitMonitor(Callback):
 #-------------------------------------------------------------
 
 class BreakOnMonitor(Callback):
-    def __init__(self, monitor='acc', value=0.8, epoch_limit=30, verbose=1):
+    def __init__(self, monitor='loss', value=0.8, epoch_limit=30, verbose=1):
         super(Callback, self).__init__()
         self.monitor = monitor
         self.value = value
@@ -175,14 +179,14 @@ class BreakOnMonitor(Callback):
         print("Stop file: %s (create this file to stop training gracefully)" % self.stop_file)
 
     def on_epoch_end(self, epoch, logs={}):
-        curr_acc = logs.get(self.monitor)
-        if curr_acc is None:
+        curr_loss = logs.get(self.monitor)
+        if curr_loss is None:
             warnings.warn("Early stopping requires %s available!" % self.monitor, RuntimeWarning)
 
-        if curr_acc > self.max_value:
-            self.max_value = curr_acc
+        if curr_loss < self.min_value:
+            self.min_value = curr_loss
 
-        if epoch > self.epoch_limit and self.max_value < self.value:
+        if epoch > self.epoch_limit and self.min_value < self.value:
             if self.verbose > 0:
                 print("\nEARLY STOPPING: epoch=%d ; No monitor progress" % epoch)
             self.model.stop_training = True
@@ -195,6 +199,8 @@ class BreakOnMonitor(Callback):
 
 # h - history object returned by Keras model method
 def show_scores(model, h, X_train, Y_train, X_test, Y_test):
+    #print( h.params )
+
     loss, acc = model.evaluate(X_train, Y_train, verbose=0)
     print("Training: accuracy   = %.6f loss = %.6f" % (acc, loss))
     loss, acc = model.evaluate(X_test, Y_test, verbose=0)
@@ -204,13 +210,13 @@ def show_scores(model, h, X_train, Y_train, X_test, Y_test):
         print("Under fitting score  = %.6f" % under_fitting_score(h))
     print("Params count:", model.count_params())
     print("stop epoch =", max(h.epoch))
-    print("n_epoch =", h.params['n_epoch'])
+    print("epochs =", h.params['epochs'])
     print("batch_size =", h.params['batch_size'])
-    print("n_sample =", h.params['n_sample'])
-    view_acc(h)
+    print("samples =", h.params['samples'])
+    #view_acc(h)
     id = model.name[-1]
-    plt.savefig(model.name + '_acc_graph.png')
-    plt.show()
+    #plt.savefig(model.name + '_acc_graph.png')
+    #plt.show()
     view_loss(h)
     plt.savefig(model.name + '_loss_graph.png')
     plt.show()
@@ -261,21 +267,21 @@ def under_fitting_score(h):
 def find_best_epoch(h, thresh=0.02):
     epochs = []
     for i in h.epoch:
-        acc = h.history['acc'][i]
-        val_acc = h.history['val_acc'][i]
-        if abs(acc-val_acc) <= thresh:
+        loss = h.history['loss'][i]
+        val_loss = h.history['val_loss'][i]
+        if abs(loss-val_loss) <= thresh:
             epochs.append(i)
 
     if not epochs:
         print("No result")
         return None
     max_e = -1
-    max_val_acc = -1
+    max_val_loss = -1
     for i in epochs:
-        if h.history['val_acc'][i] > max_val_acc:
+        if h.history['val_loss'][i] > max_val_loss:
             max_e = i
-            max_val_acc = h.history['val_acc'][i]
-    print("best epoch = %d ; best acc = %.6f ; best val_acc = %.6f" % (max_e, h.history['acc'][max_e], h.history['val_acc'][max_e]))
+            max_val_loss = h.history['val_loss'][i]
+    print("best epoch = %d ; best loss = %.6f ; best val_loss = %.6f" % (max_e, h.history['loss'][max_e], h.history['val_loss'][max_e]))
     return max_e
 
 def success_rate(model, X_test, y_test):
